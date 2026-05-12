@@ -1,4 +1,17 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getFirestore, collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+
+// ── Firebase config ──────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyDD55QarGkM7iX4A3HINqx55g959906p_o",
+  authDomain: "passaro-verde-27480.firebaseapp.com",
+  projectId: "passaro-verde-27480",
+  storageBucket: "passaro-verde-27480.firebasestorage.app",
+  messagingSenderId: "716097005063",
+  appId: "1:716097005063:web:55f7beb9069b869790eca2",
+};
+const db = getFirestore(initializeApp(firebaseConfig));
 import {
   Zap, Droplet, Hammer, Brush, DoorOpen, Settings2,
   User, BarChart3, MapPin, Clock, Check, AlertCircle,
@@ -61,6 +74,8 @@ const MONO = "'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace";
 // Company branding
 const BRAND_NAME    = 'Pássaro Verde';
 const BRAND_TAGLINE = 'Manutenção Predial';
+// ── Real logo images (JPG, embedded as base64) ──────────────────
+
 
 // Persistence keys (window.storage)
 const STORAGE_KEYS = {
@@ -147,7 +162,7 @@ const SERVICE_MAP = Object.fromEntries(SERVICE_TYPES.map(s => [s.id, s]));
 
 const YEAR = new Date().getFullYear();
 
-const SEED_ORDERS = [];
+const SEED_ORDERS = []; // banco limpo — dados reais dos funcionários
 
 // ================================================================
 //  UTILS
@@ -214,20 +229,10 @@ function formatDurationMin(min) {
   return r === 0 ? `${h}h` : `${h}h${pad(r,2)}`;
 }
 
-function formatCoord(value, digits = 6) {
-  return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '';
-}
-
 function avgDurationMin(orders) {
   const ds = orders.map(getDurationMin).filter(v => v != null);
   if (!ds.length) return null;
   return Math.round(ds.reduce((a,b) => a+b, 0) / ds.length);
-}
-
-function totalDurationMin(orders) {
-  const ds = orders.map(getDurationMin).filter(v => v != null);
-  if (!ds.length) return null;
-  return ds.reduce((a,b) => a+b, 0);
 }
 
 function completionRate(orders) {
@@ -292,8 +297,8 @@ function generateCSV(orders) {
     SERVICE_MAP[o.serviceType]?.label || o.serviceType,
     o.description || '',
     o.address,
-    formatCoord(o.coords?.lat, 6),
-    formatCoord(o.coords?.lng, 6),
+    o.coords.lat.toFixed(6),
+    o.coords.lng.toFixed(6),
     o.startedAt ? new Date(o.startedAt).toLocaleString('pt-BR') : '',
     o.endedAt   ? new Date(o.endedAt).toLocaleString('pt-BR')   : '',
     statusLabel[o.status],
@@ -329,24 +334,15 @@ const STATUS_META = {
 const safeStorage = {
   async get(key) {
     try {
-      if (window.storage?.get) {
-        const res = await window.storage.get(key, true);
-        return res?.value ? JSON.parse(res.value) : null;
-      }
-      const raw = window.localStorage?.getItem(key);
-      return raw ? JSON.parse(raw) : null;
+      const res = await window.storage?.get(key, true);
+      return res?.value ? JSON.parse(res.value) : null;
     } catch {
       return null;  // key doesn't exist or storage unavailable
     }
   },
   async set(key, value) {
     try {
-      const serialized = JSON.stringify(value);
-      if (window.storage?.set) {
-        await window.storage.set(key, serialized, true);
-      } else {
-        window.localStorage?.setItem(key, serialized);
-      }
+      await window.storage?.set(key, JSON.stringify(value), true);
       return true;
     } catch (e) {
       console.error('Storage save failed:', e);
@@ -392,21 +388,6 @@ function GlobalStyles() {
   return (
     <style>{`
       *, *::before, *::after { box-sizing: border-box; }
-      .flex { display: flex; }
-      .inline-flex { display: inline-flex; }
-      .items-center { align-items: center; }
-      .items-start { align-items: flex-start; }
-      .justify-between { justify-content: space-between; }
-      .justify-center { justify-content: center; }
-      .gap-1 { gap: 4px; }
-      .gap-1\.5 { gap: 6px; }
-      .gap-2 { gap: 8px; }
-      .gap-3 { gap: 12px; }
-      .w-full { width: 100%; }
-      .rounded-full { border-radius: 9999px; }
-      .rounded-2xl { border-radius: 16px; }
-      .font-medium { font-weight: 500; }
-      .select-none { user-select: none; }
       .os-root { font-family: ${FONT}; font-feature-settings: "cv11","ss01","ss03"; letter-spacing: -0.01em; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
       .os-mono { font-family: ${MONO}; letter-spacing: 0; font-feature-settings: "zero","ss01"; }
       .os-tap { transition: transform 140ms cubic-bezier(.2,.8,.2,1), background-color 140ms, border-color 140ms, box-shadow 200ms; }
@@ -526,71 +507,50 @@ function Spinner({ size = 18, color = C.brand }) {
 //  LOGO — inline SVG of the company bird mark
 //  Colors: dark green body+tail, lime wing, flame red crest line
 // ================================================================
+// ── Logo & BrandLockup — SVG inline, fundo transparente ─────────
 function Logo({ width = 80, tone = 'color' }) {
-  // viewBox tightly cropped to the actual logo geometry
   const VB = '5400 13300 9500 3300';
   const ASPECT = 9500 / 3300;
   const height = width / ASPECT;
-
-  const monoColor = tone === 'white' ? '#FFFFFF' : tone === 'mono' ? C.brand : null;
-
+  const mono = tone === 'white' ? '#FFFFFF' : tone === 'mono' ? C.brand : null;
   return (
     <svg
-      width={width}
-      height={height}
-      viewBox={VB}
+      width={width} height={height} viewBox={VB}
       xmlns="http://www.w3.org/2000/svg"
       style={{ display:'block', flexShrink: 0 }}
-      aria-label={`Logotipo ${BRAND_NAME}`}
+      aria-label={BRAND_NAME}
     >
-      {/* dark green tail */}
-      <path
-        d="M12247.53 16478.75c0,0 -488.87,-1120.12 2478.66,-1937.57l-644.26 0.01c0,0 -170.14,-184.96 -438.41,-184.96l-2216.16 0 228.38 1882.6 510.3 218.79 81.49 21.13z"
-        fill={monoColor || '#144D29'}
-      />
-      {/* lime body */}
-      <path
-        d="M12247.53 16478.75c0,0 -814.53,-450.94 -454.7,-1283.27 1292.38,-2989.42 -5533.27,-1693.8 -5533.27,-1693.8 914.03,-44.82 2597.68,100.98 3545.61,1501.62 947.94,1400.65 2442.37,1475.45 2442.37,1475.45l-0.01 0z"
-        fill={monoColor || '#C9DB03'}
-      />
-      {/* flame red crest */}
-      <path
-        d="M7926.47 13682.29c2810.31,-227 3549.33,486.5 3549.33,486.5 -1013.21,-1145.57 -5216.25,-667.1 -5216.25,-667.1 435.3,-21.35 1045.13,0.54 1666.92,180.6l0 0z"
-        fill={monoColor || '#D42E12'}
-      />
+      <path d="M12247.53 16478.75c0,0 -488.87,-1120.12 2478.66,-1937.57l-644.26 0.01c0,0 -170.14,-184.96 -438.41,-184.96l-2216.16 0 228.38 1882.6 510.3 218.79 81.49 21.13z" fill={mono || '#144D29'} />
+      <path d="M12247.53 16478.75c0,0 -814.53,-450.94 -454.7,-1283.27 1292.38,-2989.42 -5533.27,-1693.8 -5533.27,-1693.8 914.03,-44.82 2597.68,100.98 3545.61,1501.62 947.94,1400.65 2442.37,1475.45 2442.37,1475.45l-0.01 0z" fill={mono || '#C9DB03'} />
+      <path d="M7926.47 13682.29c2810.31,-227 3549.33,486.5 3549.33,486.5 -1013.21,-1145.57 -5216.25,-667.1 -5216.25,-667.1 435.3,-21.35 1045.13,0.54 1666.92,180.6l0 0z" fill={mono || '#D42E12'} />
     </svg>
   );
 }
 
-// Brand lockup: logo + wordmark (for header bars)
 function BrandLockup({ size = 'sm', tone = 'color' }) {
   const isLg = size === 'lg';
-  const logoW = isLg ? 110 : 64;
   const isDark = tone === 'white';
   return (
     <div className="flex items-center" style={{ gap: isLg ? 14 : 10 }}>
-      <Logo width={logoW} tone={tone} />
+      <Logo width={isLg ? 100 : 56} tone={tone} />
       <div style={{ display:'flex', flexDirection:'column', lineHeight: 1 }}>
         <span style={{
-          fontSize: isLg ? 22 : 15,
-          fontWeight: 600,
-          color: isDark ? '#fff' : C.ink,
-          letterSpacing: '-0.025em',
+          fontSize: isLg ? 22 : 15, fontWeight: 600,
+          color: isDark ? '#fff' : C.ink, letterSpacing: '-0.025em',
         }}>{BRAND_NAME}</span>
         {isLg && (
           <span style={{
-            fontSize: 12,
-            color: isDark ? 'rgba(255,255,255,.65)' : C.ink3,
-            marginTop: 4,
-            fontWeight: 500,
-            letterSpacing: '.04em',
-            textTransform: 'uppercase',
+            fontSize: 12, color: isDark ? 'rgba(255,255,255,.65)' : C.ink3,
+            marginTop: 4, fontWeight: 500, letterSpacing: '.04em', textTransform: 'uppercase',
           }}>{BRAND_TAGLINE}</span>
         )}
       </div>
     </div>
   );
 }
+
+
+
 
 // Time-aware greeting
 function getGreeting() {
@@ -1338,6 +1298,7 @@ function StartServiceSheet({ open, onClose, onConfirm, employee }) {
   );
 }
 
+
 // ================================================================
 //  END SERVICE FLOW (modal sheet)
 // ================================================================
@@ -1646,11 +1607,7 @@ function DailyBarChart({ orders, days = 7, range }) {
 
 function EmployeeProductivityRow({ employee, orders, isActive, onClick }) {
   const total = orders.length;
-  const totalMinutes = orders
-    .map(getDurationMin)
-    .filter(v => v != null)
-    .reduce((a, b) => a + b, 0);
-  const totalHours = totalMinutes > 0 ? formatDurationMin(totalMinutes) : '—';
+  const avg = avgDurationMin(orders);
   const rate = completionRate(orders);
 
   return (
@@ -1680,10 +1637,10 @@ function EmployeeProductivityRow({ employee, orders, isActive, onClick }) {
       </div>
       <div style={{ textAlign:'right', flexShrink: 0 }}>
         <div className="os-mono" style={{ fontSize: 15, fontWeight: 600, color: C.ink, letterSpacing:'-0.02em' }}>
-          {totalHours}
+          {total}
         </div>
         <div style={{ fontSize: 10.5, color: C.ink3, marginTop: 1 }}>
-          {total} OS{total === 1 ? '' : 's'}
+          {avg != null ? formatDurationMin(avg) : '—'}
           {rate != null && (
             <>
               <span style={{ margin:'0 4px', color: C.borderStrong }}>·</span>
@@ -1726,7 +1683,7 @@ function ManagerView({ orders, employees, onAddEmployee, onDeleteEmployee }) {
 
   const metrics = useMemo(() => ({
     count:      fullyFiltered.length,
-    totalMin:   totalDurationMin(fullyFiltered),
+    avgMin:     avgDurationMin(fullyFiltered),
     completion: completionRate(fullyFiltered),
     active:     fullyFiltered.filter(o => o.status === 'em_andamento').length,
   }), [fullyFiltered]);
@@ -1853,7 +1810,7 @@ function ManagerView({ orders, employees, onAddEmployee, onDeleteEmployee }) {
 
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap: 4, marginBottom: 18 }}>
             <Metric label="OSs" value={pad(metrics.count, 2)} primary />
-            <Metric label="Horas trabalhadas" value={formatDurationMin(metrics.totalMin)} />
+            <Metric label="Tempo médio" value={formatDurationMin(metrics.avgMin)} />
             <Metric
               label="Conclusão"
               value={metrics.completion != null ? `${metrics.completion}%` : '—'}
@@ -2146,13 +2103,11 @@ function OSDetailSheet({ order, onClose }) {
           </div>
         )}
         <DetailRow icon={<MapPin size={14} />} label="Endereço" value={order.address} />
-        {typeof order.coords?.lat === 'number' && typeof order.coords?.lng === 'number' && (
-          <DetailRow
-            icon={<Hash size={14} />}
-            label="Coordenadas"
-            value={<span className="os-mono">{formatCoord(order.coords.lat, 5)}, {formatCoord(order.coords.lng, 5)}</span>}
-          />
-        )}
+        <DetailRow
+          icon={<Hash size={14} />}
+          label="Coordenadas"
+          value={<span className="os-mono">{order.coords.lat.toFixed(5)}, {order.coords.lng.toFixed(5)}</span>}
+        />
         <DetailRow icon={<Calendar size={14} />} label="Início" value={formatDateTime(order.startedAt)} />
         {order.endedAt && (
           <DetailRow icon={<CheckCircle2 size={14} />} label="Encerramento" value={formatDateTime(order.endedAt)} />
@@ -2537,26 +2492,68 @@ export default function App() {
   const [tab, setTab]               = useState('worker');
   const [employee, setEmployee]     = useState(null);
 
-  // Persisted state — survives reloads via window.storage
-  const [orders, setOrders]                = usePersistedState(STORAGE_KEYS.orders, SEED_ORDERS);
-  const [employees, setEmployees]          = usePersistedState(STORAGE_KEYS.employees, INITIAL_EMPLOYEES);
+  // ── Firebase: estado em tempo real ──────────────────────────────
+  const [orders,    setOrders]    = useState([]);
+  const [employees, setEmployees] = useState(INITIAL_EMPLOYEES);
+  const [dbReady,   setDbReady]   = useState(false);
 
-  const [startOpen, setStartOpen]   = useState(false);
-  const [endOpen, setEndOpen]       = useState(false);
+  const [startOpen, setStartOpen]     = useState(false);
+  const [endOpen, setEndOpen]         = useState(false);
   const [endingOrder, setEndingOrder] = useState(null);
-  const [tick, setTick]             = useState(0);
+  const [tick, setTick]               = useState(0);
 
   const isManager = employee?.isManager === true;
 
-  // refresh elapsed times every 30 s
+  // Escuta ordens em tempo real
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'orders'), snap => {
+      setOrders(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setDbReady(true);
+    }, () => setDbReady(true));
+    return unsub;
+  }, []);
+
+  // Escuta funcionários em tempo real
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'employees'), snap => {
+      if (snap.docs.length === 0) {
+        // Primeira vez: sobe os funcionários iniciais para o Firestore
+        Object.values(INITIAL_EMPLOYEES).forEach(emp =>
+          setDoc(doc(db, 'employees', emp.id), emp)
+        );
+      } else {
+        const map = {};
+        snap.docs.forEach(d => { map[d.id] = { id: d.id, ...d.data() }; });
+        setEmployees(map);
+      }
+    });
+    return unsub;
+  }, []);
+
+  // Atualiza elapsed a cada 30 s
   useEffect(() => {
     const id = setInterval(() => setTick(t => t + 1), 30000);
     return () => clearInterval(id);
   }, []);
 
+  // ── Google Sheets — envia cada OS para a planilha ────────────
+  const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbyvMpQG5jrqgaDzKjurIMGw_vqpcs4DmBNWBl35y_1iPR0yQIGMr2NZnk69rhVsYzEr6Q/exec';
+
+  async function enviarParaPlanilha(order) {
+    try {
+      await fetch(SHEETS_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(order),
+      });
+    } catch (e) {
+      console.warn('Sheets: falha ao enviar OS', e);
+    }
+  }
+
   function handleLogin(emp) {
     setEmployee(emp);
-    // Manager lands on panel by default
     setTab(emp.isManager ? 'manager' : 'worker');
   }
 
@@ -2565,19 +2562,17 @@ export default function App() {
     setTab('worker');
   }
 
-  function handleAddEmployee(emp) {
+  async function handleAddEmployee(emp) {
     setEmployees(prev => ({ ...prev, [emp.id]: emp }));
+    await setDoc(doc(db, 'employees', emp.id), emp);
   }
 
-  function handleDeleteEmployee(id) {
-    setEmployees(prev => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
+  async function handleDeleteEmployee(id) {
+    setEmployees(prev => { const n = { ...prev }; delete n[id]; return n; });
+    await deleteDoc(doc(db, 'employees', id));
   }
 
-  function handleStartConfirm({ serviceType, description, location }) {
+  async function handleStartConfirm({ serviceType, description, location }) {
     const newOrder = {
       id: `os-${Date.now()}`,
       osNumber: nextOSNumber(orders),
@@ -2586,13 +2581,15 @@ export default function App() {
       serviceType,
       description,
       address: location.address,
-      coords: { lat: location.lat, lng: location.lng },
+      coords: { lat: location.lat ?? null, lng: location.lng ?? null },
       startedAt: new Date().toISOString(),
       endedAt: null,
       status: 'em_andamento',
       observations: '',
     };
     setOrders(prev => [...prev, newOrder]);
+    await setDoc(doc(db, 'orders', newOrder.id), newOrder);
+    enviarParaPlanilha(newOrder);
     setStartOpen(false);
   }
 
@@ -2601,12 +2598,13 @@ export default function App() {
     setEndOpen(true);
   }
 
-  function handleEndConfirm({ status, observations }) {
+  async function handleEndConfirm({ status, observations }) {
+    const updates = { status, observations, endedAt: new Date().toISOString() };
     setOrders(prev => prev.map(o =>
-      o.id === endingOrder.id
-        ? { ...o, status, observations, endedAt: new Date().toISOString() }
-        : o
+      o.id === endingOrder.id ? { ...o, ...updates } : o
     ));
+    await updateDoc(doc(db, 'orders', endingOrder.id), updates);
+    enviarParaPlanilha({ ...endingOrder, ...updates });
     setEndOpen(false);
     setEndingOrder(null);
   }
